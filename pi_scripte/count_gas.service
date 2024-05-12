@@ -1,0 +1,10 @@
+[Unit]
+Description=Simple increment counter for gas meter pulse
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/count_gas.py
+
+[Install]
+WantedBy=multi-user.target
+
