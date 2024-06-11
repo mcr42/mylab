@@ -1,5 +1,4 @@
 #!/bin/python3
-#!/bin/python3
 import time
 import os
 from datetime import timedelta, datetime
