@@ -1,0 +1,218 @@
+#!/bin/python3
+
+import sys, os, random, array
+from time import sleep
+from datetime import timedelta, datetime
+from gpiozero import DigitalInputDevice, DigitalOutputDevice
+
+PIN_RES=DigitalOutputDevice(27, active_high=False, initial_value=True)
+PIN_SDA=DigitalOutputDevice( 2, active_high=True,  initial_value=False)
+PIN_SCK=DigitalOutputDevice( 3, active_high=True,  initial_value=False)
+PIN_CS=DigitalOutputDevice(  4, active_high=False, initial_value=False)
+PIN_DC=DigitalOutputDevice( 17, active_high=True,  initial_value=False)
+PIN_BSY=DigitalInputDevice( 22, pull_up=None, active_state=True)
+
+vcom=0x26
+
+LUT_DATA = [
+0x80,0x60,0x40,0x00,0x00,0x00,0x00,             # LUT0: BB:     VS 0 ~7
+0x10,0x60,0x20,0x00,0x00,0x00,0x00,             # LUT1: BW:     VS 0 ~7
+0x80,0x60,0x40,0x00,0x00,0x00,0x00,             # LUT2: WB:     VS 0 ~7
+0x10,0x60,0x20,0x00,0x00,0x00,0x00,             # LUT3: WW:     VS 0 ~7
+0x00,0x00,0x00,0x00,0x00,0x00,0x00,             # LUT4: VCOM:   VS 0 ~7
+
+0x03,0x03,0x00,0x00,0x02,                       #  TP0 A~D RP0
+0x09,0x09,0x00,0x00,0x02,                       #  TP1 A~D RP1
+0x03,0x03,0x00,0x00,0x02,                       #  TP2 A~D RP2
+0x00,0x00,0x00,0x00,0x00,                       #  TP3 A~D RP3
+0x00,0x00,0x00,0x00,0x00,                       #  TP4 A~D RP4
+0x00,0x00,0x00,0x00,0x00,                       #  TP5 A~D RP5
+0x00,0x00,0x00,0x00,0x00,                       #  TP6 A~D RP6
+
+0x15,0x41,0xA8,0x32,0x30,0x0A,
+]
+
+SCREENSIZE=4736    # 128 by 296, divide by 8
+
+delay=1
+
+image = [ ]
+
+def usleep(time):
+    pass
+
+def getLong(a, n):
+    return ((a[n+3] << 24) | (a[n+2] << 16) | (a[n+1] << 8) | (a[n]))
+
+def epaper_waitBsy(time):
+    PIN_BSY.wait_for_active(0.1)
+    PIN_BSY.wait_for_inactive(time)
+
+def epaper_readBit():
+    PIN_SCK.off()
+    usleep(delay)
+    bit = PIN_SDA.value
+    PIN_SCK.on()
+    usleep(delay)
+    return bit
+
+def epaper_readByte():
+    global PIN_SDA
+    val = 0
+    pin=PIN_SDA.pin.number
+    PIN_SDA.close()
+    PIN_SDA=DigitalInputDevice(pin, pull_up=None, active_state=True)
+    for i in range(8):
+        val = val | epaper_readBit()
+        val = val << 1
+    PIN_SCK.off()
+
+def epaper_sendBit(byte):
+    PIN_SCK.off()
+    usleep(delay)
+    if (byte & 0x80):
+        PIN_SDA.on()
+    else:
+        PIN_SDA.off()
+    PIN_SCK.on()
+    usleep(delay)
+
+def epaper_sendByte(byte):
+    global PIN_SDA
+    val = byte
+    pin=PIN_SDA.pin.number
+    PIN_SDA.close()
+    PIN_SDA=DigitalOutputDevice(pin, active_high=True, initial_value=False)
+    for i in range(8):
+        epaper_sendBit(val)
+        val = val << 1
+    PIN_SCK.off()
+
+def epaper_sendData(data):
+    PIN_CS.off()
+    PIN_CS.on()
+    PIN_DC.on()
+    epaper_sendByte(data)
+    PIN_CS.off()
+
+def epaper_sendCmd(data):
+    PIN_CS.off()
+    PIN_CS.on()
+    PIN_DC.off()
+    epaper_sendByte(data)
+    PIN_CS.off()
+
+def epaper_reset():
+    sleep(0.01)
+    PIN_RES.on()
+    sleep(0.001)
+    PIN_RES.off()
+    sleep(0.001)
+    epaper_waitBsy(0.1)
+    epaper_sendCmd(0x12)
+    epaper_waitBsy(1)
+
+
+def epaper_setup():
+    epaper_sendCmd(0x74) #set analog block control       
+    epaper_sendData(0x54)
+    epaper_sendCmd(0x7E) #set digital block control          
+    epaper_sendData(0x3B)
+
+    epaper_sendCmd(0x01)    #Driver output control      
+    epaper_sendData(0x27)
+    epaper_sendData(0x01)
+    epaper_sendData(0x00)
+
+    epaper_sendCmd(0x11)   #data entry mode       
+    epaper_sendData(0x01)
+
+    epaper_sendCmd(0x44)    #set Ram-X address start/end position   
+    epaper_sendData(0x00)
+    epaper_sendData(0x0F)   #0x0C-->(15+1)*8=128
+
+    epaper_sendCmd(0x45)    #set Ram-Y address start/end position          
+    epaper_sendData(0x27)   #0x0127-->(295+1)=296
+    epaper_sendData(0x01)
+    epaper_sendData(0x00)
+    epaper_sendData(0x00) 
+
+    epaper_sendCmd(0x3C)    #BorderWavefrom
+    epaper_sendData(0x03)    
+
+    epaper_sendCmd(0x2C)    #VCOM Voltage
+    epaper_sendData(vcom)
+
+    epaper_sendCmd(0x03)     
+    epaper_sendData(LUT_DATA[70])
+
+    epaper_sendCmd(0x04)      
+    epaper_sendData(LUT_DATA[71])    
+    epaper_sendData(LUT_DATA[72])    
+    epaper_sendData(LUT_DATA[73])    
+
+    epaper_sendCmd(0x3A)     #Dummy Line     
+    epaper_sendData(LUT_DATA[74])    
+    epaper_sendCmd(0x3B)     #Gate time 
+    epaper_sendData(LUT_DATA[75])   
+
+    epaper_sendCmd(0x32) #send LUT
+    for i in range(70):
+        epaper_sendData(LUT_DATA[i])
+
+    epaper_sendCmd(0x4E)   # set RAM x address count to 0;
+    epaper_sendData(0x00)
+    epaper_sendCmd(0x4F)   # set RAM y address count to 0X127;    
+    epaper_sendData(0x27)
+    epaper_sendData(0x01)
+    epaper_waitBsy(1);
+
+def epaper_sendImage(image):
+    epaper_sendCmd(0x24)
+    for i in range(SCREENSIZE):
+        epaper_sendData(image[i])
+    epaper_sendCmd(0x22)
+    epaper_sendData(0xC7)
+    epaper_sendCmd(0x20)
+    epaper_waitBsy(1)
+
+def epaper_sleep():
+    epaper_sendCmd(0x22) #POWER OFF
+    epaper_sendData(0xC3)   
+    epaper_sendCmd(0x20)  
+                    
+    epaper_sendCmd(0x10) #enter deep sleep
+    epaper_sendData(0x01) 
+    sleep(0.1)
+
+if sys.argv[1]=="random":
+    random.seed(10)
+    image = random.randbytes(SCREENSIZE)
+elif sys.argv[1]=="black":
+    for i in range(SCREENSIZE):
+        image.append(0x00)
+elif sys.argv[1]=="white":
+    for i in range(SCREENSIZE):
+        image.append(0xFF)
+else:
+    with open(sys.argv[1], mode='rb') as file:
+        size=os.path.getsize(sys.argv[1])
+        contents=array.array('B')
+        contents.fromfile(file, size)
+        data=contents.tolist()
+        offset=getLong(data, 10)
+        width=getLong(data, 18)
+        height=getLong(data, 22)
+        print("Loading bitmap with " + str(width) + "x" + str(height) + ", offset " + str(offset))
+        for x in range(SCREENSIZE):
+            image.append(data[offset + x] ^ 0xFF)
+
+print("Resetting")
+epaper_reset()
+print("Init")
+epaper_setup()
+print("Send Image")
+epaper_sendImage(image)
+print("Sleep")
+epaper_sleep()
+
